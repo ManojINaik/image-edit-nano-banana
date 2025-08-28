@@ -1,5 +1,5 @@
-import { GoogleGenAI, Modality } from "@google/genai";
-import type { ImageFile } from '../types';
+import { GoogleGenAI, Type, Modality } from "@google/genai";
+import type { ImageFile, GeneratedPrompts } from '../types';
 
 if (!process.env.API_KEY) {
     throw new Error("API_KEY environment variable is not set");
@@ -12,19 +12,75 @@ const getBase64Data = (dataUrl: string): string => {
     return dataUrl.split(',')[1];
 }
 
-export const generateStyledImage = async (
-    styleImage: ImageFile,
-    sourceImage: ImageFile
-): Promise<string> => {
+/**
+ * Generates three distinct prompts from a single reference image.
+ */
+export const generatePromptsFromImage = async (
+    referenceImage: ImageFile
+): Promise<GeneratedPrompts> => {
     try {
-        const styleImagePart = {
+        const imagePart = {
             inlineData: {
-                data: getBase64Data(styleImage.base64),
-                mimeType: styleImage.mimeType,
+                data: getBase64Data(referenceImage.base64),
+                mimeType: referenceImage.mimeType,
             },
         };
 
-        const sourceImagePart = {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: {
+                parts: [
+                    { text: "reverse engineer the attached image and generate three distinct prompts that could be used to create similar image style of person and style like color, blur and other. Follow the JSON schema precisely." },
+                    imagePart
+                ]
+            },
+            config: {
+                systemInstruction: "You are an expert prompt engineer for generative AI image models. Your task is to analyze a user-provided image and generate three distinct prompts. Respond ONLY with a valid JSON object that matches the provided schema.",
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        simple: {
+                            type: Type.STRING,
+                            description: 'A simple prompt',
+                        },
+                        detailed: {
+                            type: Type.STRING,
+                            description: 'A detailed prompt',
+                        },
+                        technical: {
+                            type: Type.STRING,
+                            description: 'A technical prompt',
+                        },
+                    },
+                    required: ["simple", "detailed", "technical"],
+                },
+            },
+        });
+        
+        // The response text should be a valid JSON string matching the schema.
+        const promptsJson = response.text.trim();
+        return JSON.parse(promptsJson);
+
+    } catch (error) {
+        console.error('Error generating prompts with Gemini:', error);
+        if (error instanceof Error) {
+            throw new Error(`Failed to generate prompts: ${error.message}`);
+        }
+        throw new Error('An unknown error occurred during prompt generation.');
+    }
+};
+
+
+/**
+ * Generates an image by applying a text prompt to a source image.
+ */
+export const generateImageFromPromptAndSource = async (
+    prompt: string,
+    sourceImage: ImageFile
+): Promise<string> => {
+     try {
+        const imagePart = {
             inlineData: {
                 data: getBase64Data(sourceImage.base64),
                 mimeType: sourceImage.mimeType,
@@ -32,51 +88,19 @@ export const generateStyledImage = async (
         };
 
         const textPart = {
-            text: `Deep Style Transfer (IP-Adapter guided)
-
-INPUT IMAGES
-- source_image: <SOURCE_IMAGE>
-- reference_style_image: <STYLE_IMAGE>
-
-TEXT PROMPT
-Render the person from the source_image with identity and pose perfectly preserved (exact facial landmarks, proportions, expression, hairstyle, skin tone, and clothing silhouette). Apply the full artistic style of the reference_style_image: match its color palette, lighting direction and contrast, tone mapping, textures/brushwork/material rendering, grain/noise characteristics, background mood, and overall compositional depth. Integrate subject and background seamlessly with coherent shadows, rim lights, and reflections consistent with the reference style. Same medium/technique as the reference (if painterly, reproduce brushwork and canvas texture; if photographic, reproduce lens characteristics, bokeh, and film grain). High fidelity detail, clean edges, natural skin, no artifacts.
-
-NEGATIVE PROMPT
-deformed, identity drift, off-model face, wrong pose, misaligned eyes, extra fingers, extra limbs, hand/ear/eye artifacts, duplicated features, distortion, blurriness, low-res, overexposed, banding, posterization, watermark, logo, text, frame, border
-
-IMAGE-BASED GUIDANCE (IP-Adapter)
-- ip_adapter_faceid:
-  image = <SOURCE_IMAGE>
-  weight = 0.85–0.95
-  start = 0.00
-  end = 1.00
-- ip_adapter_style:
-  image = <STYLE_IMAGE>
-  weight = 0.70–0.90
-  start = 0.00
-  end = 0.90
-
-SAMPLING / IMG2IMG (recommended)
-- base_image: <SOURCE_IMAGE>  (img2img to preserve pose/framing)
-- denoise_strength: 0.30–0.45  (lower = stronger identity/pose lock)
-- steps: 28–40
-- cfg_scale: 4.0–6.0
-- sampler: DPM++ 2M Karras (or Euler a / UniPC)
-- seed: <OPTIONAL_FIXED_SEED_FOR_REPRODUCIBILITY>`,
+            text: `create image in this style: ${prompt}`,
         };
         
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash-image-preview',
             contents: {
-                // Order updated: source image first, then style image, to match the prompt.
-                parts: [textPart, sourceImagePart, styleImagePart],
+                parts: [imagePart, textPart]
             },
             config: {
                 responseModalities: [Modality.IMAGE, Modality.TEXT],
             },
         });
-        
-        // The response can have multiple parts, we need to find the image part
+
         for (const part of response.candidates[0].content.parts) {
             if (part.inlineData) {
                 const base64ImageBytes: string = part.inlineData.data;
@@ -84,7 +108,7 @@ SAMPLING / IMG2IMG (recommended)
                 return `data:${mimeType};base64,${base64ImageBytes}`;
             }
         }
-
+        
         throw new Error('No image was generated by the API.');
 
     } catch (error) {
@@ -94,4 +118,4 @@ SAMPLING / IMG2IMG (recommended)
         }
         throw new Error('An unknown error occurred during image generation.');
     }
-};
+}

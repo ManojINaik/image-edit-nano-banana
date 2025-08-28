@@ -1,5 +1,5 @@
 {
-  "name": "Gemini AI Style Clone",
-  "description": "An application that takes a reference style image and a source face image, then uses the Gemini API to generate a new image that applies the style of the reference image to the face from the source image.",
+  "name": "Gemini AI Style Transfer",
+  "description": "An application that generates creative prompts from a reference style image and then applies them to a source content image to create new, stylized results using the Gemini API.",
   "requestFramePermissions": []
 }
